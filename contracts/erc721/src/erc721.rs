@@ -278,6 +278,12 @@ impl<T: Erc721Params> Erc721<T> {
         self.base_uri.set_str(&uri);
     }
 
+    /// Returns the total number of NFTs that have been minted.
+    /// Note: this only increases — burned tokens are not subtracted.
+    pub fn total_supply(&self) -> Result<U256, Erc721Error> {
+        Ok(self.total_supply.get())
+    }
+
     /// Gets the number of NFTs owned by an account.
     pub fn balance_of(&self, owner: Address) -> Result<U256, Erc721Error> {
         Ok(self.balances.get(owner))

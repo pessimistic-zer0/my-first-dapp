@@ -20,7 +20,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${sora.variable}`}>
+      <body className={`${inter.variable} ${sora.variable}`} suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -6,7 +6,7 @@ mod erc721;
 /// Import the Stylus SDK along with alloy primitive types for use in our program.
 use stylus_sdk::{
     abi::Bytes,
-    call::Call,
+    call::{Call, RawCall},
     contract,
     evm,
     msg,
@@ -57,6 +57,18 @@ sol_storage! {
         /// Address of companion art contract
         address art_contract_address;
 
+        // ─── ERC-2981 Royalties ──────────────────────────────────────
+        /// Default royalty receiver address
+        address royalty_receiver;
+        /// Royalty fee numerator (out of 10000, e.g. 500 = 5%)
+        uint256 royalty_fee_numerator;
+
+        // ─── Marketplace ─────────────────────────────────────────────
+        /// Marketplace: tokenId → listing price in wei (0 = not listed)
+        mapping(uint256 => uint256) listing_prices;
+        /// Marketplace: tokenId → seller address
+        mapping(uint256 => address) listing_sellers;
+
         #[borrow] // Allows erc721 to access MyToken's storage and make calls
         Erc721<RobinhoodNFTParams> erc721;
     }
@@ -81,6 +93,28 @@ sol! {
     /// Whitelisted address has exceeded their mint limit
     error MintLimitExceeded(address caller, uint256 limit);
 
+    // ─── Royalty Errors ──────────────────────────────────────────
+    /// Royalty fee exceeds the maximum allowed (10%)
+    error RoyaltyFeeTooHigh(uint256 fee_numerator);
+    /// Royalty receiver cannot be the zero address
+    error ZeroAddressRoyalty();
+
+    // ─── Marketplace Errors ──────────────────────────────────────
+    /// Token is not listed for sale
+    error NotListed(uint256 token_id);
+    /// Token is already listed for sale
+    error AlreadyListed(uint256 token_id);
+    /// Insufficient ETH sent to buy the NFT
+    error InsufficientPayment(uint256 required, uint256 sent);
+    /// Caller is not the seller of the listed NFT
+    error NotSeller(address caller, address seller);
+    /// Buyer cannot be the seller
+    error CannotBuyOwnNFT(address caller);
+    /// Price must be greater than zero
+    error PriceZero();
+    /// ETH transfer failed
+    error TransferFailed(address to);
+
     /// Emitted when ownership is transferred
     event OwnershipTransferred(address indexed previous_owner, address indexed new_owner);
     /// Emitted when the contract is paused
@@ -89,6 +123,18 @@ sol! {
     event Unpaused(address account);
     /// Emitted when an address is added to or removed from the whitelist
     event WhitelistUpdated(address indexed account, bool status);
+
+    // ─── Royalty Events ──────────────────────────────────────────
+    /// Emitted when the default royalty is updated
+    event RoyaltySet(address indexed receiver, uint256 fee_numerator);
+
+    // ─── Marketplace Events ──────────────────────────────────────
+    /// Emitted when an NFT is listed for sale
+    event Listed(uint256 indexed token_id, address indexed seller, uint256 price);
+    /// Emitted when a listing is cancelled
+    event Unlisted(uint256 indexed token_id, address indexed seller);
+    /// Emitted when an NFT is sold
+    event Sold(uint256 indexed token_id, address indexed seller, address indexed buyer, uint256 price);
 }
 
 /// Represents the ways methods may fail.
@@ -102,6 +148,17 @@ pub enum RobinhoodNFTError {
     MaxSupplyReached(MaxSupplyReached),
     NotAuthorizedToMint(NotAuthorizedToMint),
     MintLimitExceeded(MintLimitExceeded),
+    // Royalty errors
+    RoyaltyFeeTooHigh(RoyaltyFeeTooHigh),
+    ZeroAddressRoyalty(ZeroAddressRoyalty),
+    // Marketplace errors
+    NotListed(NotListed),
+    AlreadyListed(AlreadyListed),
+    InsufficientPayment(InsufficientPayment),
+    NotSeller(NotSeller),
+    CannotBuyOwnNFT(CannotBuyOwnNFT),
+    PriceZero(PriceZero),
+    TransferFailed(TransferFailed),
 }
 
 // Internal helper methods (not exposed to other contracts)
@@ -386,5 +443,242 @@ impl RobinhoodNFT {
     /// Returns how many NFTs a whitelisted address has minted.
     pub fn whitelist_mints_of(&self, account: Address) -> Result<U256, Vec<u8>> {
         Ok(self.whitelist_mints.getter(account).get())
+    }
+
+    // ─── ERC-2981 Royalty Functions ───────────────────────────────
+
+    /// Returns the royalty info for a given token and sale price.
+    /// Returns (receiver, royaltyAmount).
+    /// Implements the ERC-2981 `royaltyInfo` function.
+    pub fn royalty_info(
+        &self,
+        _token_id: U256,
+        sale_price: U256,
+    ) -> Result<(Address, U256), Vec<u8>> {
+        let receiver = self.royalty_receiver.get();
+        let fee = self.royalty_fee_numerator.get();
+
+        if receiver.is_zero() || fee == U256::ZERO {
+            return Ok((Address::default(), U256::ZERO));
+        }
+
+        // royaltyAmount = salePrice * feeNumerator / 10000
+        let royalty_amount = (sale_price * fee) / U256::from(10000u64);
+        Ok((receiver, royalty_amount))
+    }
+
+    /// Sets the default royalty for all tokens.
+    /// `fee_numerator` is in basis points (out of 10000). Max 1000 (10%).
+    /// Only the owner can call this.
+    pub fn set_default_royalty(
+        &mut self,
+        receiver: Address,
+        fee_numerator: U256,
+    ) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+
+        if receiver.is_zero() {
+            return Err(RobinhoodNFTError::ZeroAddressRoyalty(ZeroAddressRoyalty {}).into());
+        }
+
+        // Cap at 10% (1000 basis points)
+        if fee_numerator > U256::from(1000u64) {
+            return Err(RobinhoodNFTError::RoyaltyFeeTooHigh(RoyaltyFeeTooHigh {
+                fee_numerator,
+            }).into());
+        }
+
+        self.royalty_receiver.set(receiver);
+        self.royalty_fee_numerator.set(fee_numerator);
+
+        evm::log(RoyaltySet {
+            receiver,
+            fee_numerator,
+        });
+
+        Ok(())
+    }
+
+    /// Returns the current default royalty receiver.
+    pub fn get_royalty_receiver(&self) -> Result<Address, Vec<u8>> {
+        Ok(self.royalty_receiver.get())
+    }
+
+    /// Returns the current default royalty fee numerator (basis points).
+    pub fn get_royalty_fee(&self) -> Result<U256, Vec<u8>> {
+        Ok(self.royalty_fee_numerator.get())
+    }
+
+    // ─── Marketplace Functions ────────────────────────────────────
+
+    /// Lists an NFT for sale at the given price (in wei).
+    /// The NFT is transferred to the contract (escrow) until sold or unlisted.
+    /// Caller must own the NFT. Reverts if paused.
+    pub fn list_for_sale(
+        &mut self,
+        token_id: U256,
+        price: U256,
+    ) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+
+        if price == U256::ZERO {
+            return Err(RobinhoodNFTError::PriceZero(PriceZero {}).into());
+        }
+
+        // Check not already listed
+        if self.listing_prices.getter(token_id).get() > U256::ZERO {
+            return Err(RobinhoodNFTError::AlreadyListed(AlreadyListed { token_id }).into());
+        }
+
+        let seller = msg::sender();
+
+        // Transfer the NFT from seller to the contract (escrow)
+        self.erc721.transfer(token_id, seller, contract::address())?;
+
+        // Store the listing
+        self.listing_prices.setter(token_id).set(price);
+        self.listing_sellers.setter(token_id).set(seller);
+
+        evm::log(Listed {
+            token_id,
+            seller,
+            price,
+        });
+
+        Ok(())
+    }
+
+    /// Cancels a listing and returns the NFT to the seller.
+    /// Only the original seller can unlist. Reverts if paused.
+    pub fn unlist(&mut self, token_id: U256) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+
+        let price = self.listing_prices.getter(token_id).get();
+        if price == U256::ZERO {
+            return Err(RobinhoodNFTError::NotListed(NotListed { token_id }).into());
+        }
+
+        let seller = self.listing_sellers.getter(token_id).get();
+        if msg::sender() != seller {
+            return Err(RobinhoodNFTError::NotSeller(NotSeller {
+                caller: msg::sender(),
+                seller,
+            }).into());
+        }
+
+        // Return NFT from contract to seller
+        self.erc721.transfer(token_id, contract::address(), seller)?;
+
+        // Clear the listing
+        self.listing_prices.setter(token_id).set(U256::ZERO);
+        self.listing_sellers.setter(token_id).set(Address::default());
+
+        evm::log(Unlisted {
+            token_id,
+            seller,
+        });
+
+        Ok(())
+    }
+
+    /// Buys a listed NFT. Caller must send ETH >= listing price.
+    /// Royalty is automatically deducted and sent to the royalty receiver.
+    /// Remainder is sent to the seller. NFT is transferred to the buyer.
+    #[payable]
+    pub fn buy_nft(&mut self, token_id: U256) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+
+        let price = self.listing_prices.getter(token_id).get();
+        if price == U256::ZERO {
+            return Err(RobinhoodNFTError::NotListed(NotListed { token_id }).into());
+        }
+
+        let seller = self.listing_sellers.getter(token_id).get();
+        let buyer = msg::sender();
+
+        if buyer == seller {
+            return Err(RobinhoodNFTError::CannotBuyOwnNFT(CannotBuyOwnNFT {
+                caller: buyer,
+            }).into());
+        }
+
+        let payment = msg::value();
+        if payment < price {
+            return Err(RobinhoodNFTError::InsufficientPayment(InsufficientPayment {
+                required: price,
+                sent: payment,
+            }).into());
+        }
+
+        // Calculate royalty
+        let royalty_receiver = self.royalty_receiver.get();
+        let royalty_fee = self.royalty_fee_numerator.get();
+        let mut seller_proceeds = price;
+
+        if !royalty_receiver.is_zero() && royalty_fee > U256::ZERO {
+            let royalty_amount = (price * royalty_fee) / U256::from(10000u64);
+            seller_proceeds = price - royalty_amount;
+
+            // Pay royalty receiver
+            if royalty_amount > U256::ZERO {
+                let _ = unsafe {
+                    RawCall::new_with_value(royalty_amount)
+                        .call(royalty_receiver, &[])
+                }.map_err(|_| -> Vec<u8> {
+                    RobinhoodNFTError::TransferFailed(TransferFailed {
+                        to: royalty_receiver,
+                    }).into()
+                })?;
+            }
+        }
+
+        // Pay seller
+        if seller_proceeds > U256::ZERO {
+            let _ = unsafe {
+                RawCall::new_with_value(seller_proceeds)
+                    .call(seller, &[])
+            }.map_err(|_| -> Vec<u8> {
+                RobinhoodNFTError::TransferFailed(TransferFailed {
+                    to: seller,
+                }).into()
+            })?;
+        }
+
+        // Transfer NFT from contract to buyer
+        self.erc721.transfer(token_id, contract::address(), buyer)?;
+
+        // Clear the listing
+        self.listing_prices.setter(token_id).set(U256::ZERO);
+        self.listing_sellers.setter(token_id).set(Address::default());
+
+        evm::log(Sold {
+            token_id,
+            seller,
+            buyer,
+            price,
+        });
+
+        // Refund excess payment
+        let excess = payment - price;
+        if excess > U256::ZERO {
+            let _ = unsafe {
+                RawCall::new_with_value(excess)
+                    .call(buyer, &[])
+            }.map_err(|_| -> Vec<u8> {
+                RobinhoodNFTError::TransferFailed(TransferFailed {
+                    to: buyer,
+                }).into()
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the listing info for a token: (seller, price).
+    /// Returns (zero_address, 0) if not listed.
+    pub fn get_listing(&self, token_id: U256) -> Result<(Address, U256), Vec<u8>> {
+        let price = self.listing_prices.getter(token_id).get();
+        let seller = self.listing_sellers.getter(token_id).get();
+        Ok((seller, price))
     }
 }

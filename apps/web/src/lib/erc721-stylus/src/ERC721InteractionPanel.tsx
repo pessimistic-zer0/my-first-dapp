@@ -18,7 +18,12 @@ import {
   CheckCircle2,
   Globe,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ShoppingCart,
+  Tag,
+  DollarSign,
+  Crown,
+  XCircle,
 } from 'lucide-react';
 import { cn } from './cn';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './Select';
@@ -96,6 +101,16 @@ const ERC721_ABI = [
   "function mintTo(address to)",
   "function safeMint(address to)",
   "function burn(uint256 token_id)",
+  // Marketplace Functions
+  "function listForSale(uint256 token_id, uint256 price)",
+  "function unlist(uint256 token_id)",
+  "function buyNft(uint256 token_id) payable",
+  "function getListing(uint256 token_id) view returns (address seller, uint256 price)",
+  // ERC-2981 Royalty Functions
+  "function royaltyInfo(uint256 token_id, uint256 sale_price) view returns (address receiver, uint256 amount)",
+  "function setDefaultRoyalty(address receiver, uint256 fee_numerator)",
+  "function getRoyaltyReceiver() view returns (address)",
+  "function getRoyaltyFee() view returns (uint256)",
 ];
 
 // Network-specific default contract addresses (only for networks where contracts are deployed)
@@ -223,6 +238,23 @@ export function ERC721InteractionPanel({
   const [approvalCheckOwner, setApprovalCheckOwner] = useState('');
   const [approvalCheckOperator, setApprovalCheckOperator] = useState('');
   const [approvalCheckResult, setApprovalCheckResult] = useState<boolean | null>(null);
+
+  // Marketplace state
+  const [listTokenId, setListTokenId] = useState('');
+  const [listPrice, setListPrice] = useState('');
+  const [unlistTokenId, setUnlistTokenId] = useState('');
+  const [buyTokenId, setBuyTokenId] = useState('');
+  const [buyListingPrice, setBuyListingPrice] = useState<string | null>(null);
+  const [buyListingSeller, setBuyListingSeller] = useState<string | null>(null);
+  const [getListingTokenId, setGetListingTokenId] = useState('');
+  const [getListingResult, setGetListingResult] = useState<{ seller: string; price: string } | null>(null);
+
+  // Royalty state
+  const [royaltyReceiver, setRoyaltyReceiver] = useState('');
+  const [royaltyFee, setRoyaltyFee] = useState('');
+  const [royaltyInfoTokenId, setRoyaltyInfoTokenId] = useState('');
+  const [royaltyInfoSalePrice, setRoyaltyInfoSalePrice] = useState('');
+  const [royaltyInfoResult, setRoyaltyInfoResult] = useState<{ receiver: string; amount: string } | null>(null);
 
   const [txStatus, setTxStatus] = useState<TxStatus>({ status: 'idle', message: '' });
   const [customAddressError, setCustomAddressError] = useState<string | null>(null);
@@ -624,6 +656,108 @@ export function ERC721InteractionPanel({
       setApprovalCheckResult(isApproved);
     } catch (error) {
       console.error('Error:', error);
+    }
+  };
+
+  // ─── Marketplace Handlers ────────────────────────────────
+
+  const handleListForSale = async () => {
+    try {
+      const contract = await getWriteContract();
+      if (!contract || !listTokenId || !listPrice) return;
+      const priceWei = ethers.parseEther(listPrice);
+      handleTransaction(
+        () => contract.listForSale(listTokenId, priceWei),
+        `NFT #${listTokenId} listed for ${listPrice} ETH!`
+      );
+    } catch (error: any) {
+      setTxStatus({ status: 'error', message: error.message || 'Failed to prepare transaction' });
+      setTimeout(() => setTxStatus({ status: 'idle', message: '' }), 5000);
+    }
+  };
+
+  const handleUnlist = async () => {
+    try {
+      const contract = await getWriteContract();
+      if (!contract || !unlistTokenId) return;
+      handleTransaction(
+        () => contract.unlist(unlistTokenId),
+        `NFT #${unlistTokenId} unlisted!`
+      );
+    } catch (error: any) {
+      setTxStatus({ status: 'error', message: error.message || 'Failed to prepare transaction' });
+      setTimeout(() => setTxStatus({ status: 'idle', message: '' }), 5000);
+    }
+  };
+
+  const handleBuyNft = async () => {
+    try {
+      const contract = await getWriteContract();
+      if (!contract || !buyTokenId || !buyListingPrice) return;
+      handleTransaction(
+        () => contract.buyNft(buyTokenId, { value: ethers.parseEther(buyListingPrice) }),
+        `NFT #${buyTokenId} purchased!`
+      );
+    } catch (error: any) {
+      setTxStatus({ status: 'error', message: error.message || 'Failed to prepare transaction' });
+      setTimeout(() => setTxStatus({ status: 'idle', message: '' }), 5000);
+    }
+  };
+
+  const checkListing = async (tokenId?: string) => {
+    const contract = getReadContract();
+    const id = tokenId || getListingTokenId;
+    if (!contract || !id) return;
+    try {
+      const [seller, price] = await contract.getListing(id);
+      const result = {
+        seller: seller as string,
+        price: ethers.formatEther(price as bigint),
+      };
+      if (tokenId === buyTokenId) {
+        setBuyListingPrice(result.price !== '0.0' ? result.price : null);
+        setBuyListingSeller(result.seller !== ethers.ZeroAddress ? result.seller : null);
+      } else {
+        setGetListingResult(
+          (price as bigint) > 0n ? result : null
+        );
+      }
+    } catch (error) {
+      console.error('Error checking listing:', error);
+    }
+  };
+
+  // ─── Royalty Handlers ────────────────────────────────────
+
+  const handleSetDefaultRoyalty = async () => {
+    try {
+      const contract = await getWriteContract();
+      if (!contract || !royaltyReceiver || !royaltyFee) return;
+      // Convert percentage to basis points (e.g., 5% → 500)
+      const bps = Math.round(parseFloat(royaltyFee) * 100);
+      handleTransaction(
+        () => contract.setDefaultRoyalty(royaltyReceiver, bps),
+        `Royalty set to ${royaltyFee}% for ${royaltyReceiver.slice(0, 8)}...!`
+      );
+    } catch (error: any) {
+      setTxStatus({ status: 'error', message: error.message || 'Failed to prepare transaction' });
+      setTimeout(() => setTxStatus({ status: 'idle', message: '' }), 5000);
+    }
+  };
+
+  const checkRoyaltyInfo = async () => {
+    const contract = getReadContract();
+    if (!contract || !royaltyInfoTokenId || !royaltyInfoSalePrice) return;
+    try {
+      const salePriceWei = ethers.parseEther(royaltyInfoSalePrice);
+      const [receiver, amount] = await contract.royaltyInfo(royaltyInfoTokenId, salePriceWei);
+      setRoyaltyInfoResult({
+        receiver: receiver as string,
+        amount: ethers.formatEther(amount as bigint),
+      });
+    } catch (error) {
+      console.error('Error checking royalty info:', error);
+      setRoyaltyInfoResult(null);
     }
   };
 
@@ -1042,6 +1176,168 @@ export function ERC721InteractionPanel({
               )}>
                 <p className={cn('text-[10px] font-medium', approvalCheckResult ? 'text-emerald-300' : 'text-red-300')}>
                   {approvalCheckResult ? '✓ Operator is approved' : '✗ Operator is not approved'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Marketplace ─────────────────────────────────────── */}
+      {isConnected && walletConnected && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <ShoppingCart className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-xs font-medium text-white">Marketplace</span>
+          </div>
+
+          {/* List for Sale */}
+          <div className="p-3 rounded-lg bg-forge-bg/50 border border-forge-border/30 space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Tag className="w-3 h-3 text-emerald-400" />
+              <span className="text-[10px] font-medium text-emerald-400">List for Sale</span>
+            </div>
+            <input type="number" value={listTokenId} onChange={(e) => setListTokenId(e.target.value)}
+              placeholder="Token ID"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <input type="text" value={listPrice} onChange={(e) => setListPrice(e.target.value)}
+              placeholder="Price (ETH)"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <button onClick={handleListForSale} disabled={txStatus.status === 'pending'}
+              className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-medium disabled:opacity-50">
+              List NFT
+            </button>
+          </div>
+
+          {/* Unlist */}
+          <div className="p-3 rounded-lg bg-forge-bg/50 border border-forge-border/30 space-y-2">
+            <div className="flex items-center gap-1.5">
+              <XCircle className="w-3 h-3 text-rose-400" />
+              <span className="text-[10px] font-medium text-rose-400">Cancel Listing</span>
+            </div>
+            <input type="number" value={unlistTokenId} onChange={(e) => setUnlistTokenId(e.target.value)}
+              placeholder="Token ID"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <button onClick={handleUnlist} disabled={txStatus.status === 'pending'}
+              className="w-full py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px] font-medium disabled:opacity-50">
+              Unlist NFT
+            </button>
+          </div>
+
+          {/* Buy NFT */}
+          <div className="p-3 rounded-lg bg-forge-bg/50 border border-forge-border/30 space-y-2">
+            <div className="flex items-center gap-1.5">
+              <ShoppingCart className="w-3 h-3 text-green-400" />
+              <span className="text-[10px] font-medium text-green-400">Buy NFT</span>
+            </div>
+            <input type="number" value={buyTokenId} onChange={(e) => { setBuyTokenId(e.target.value); setBuyListingPrice(null); setBuyListingSeller(null); }}
+              placeholder="Token ID"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <button onClick={() => checkListing(buyTokenId)}
+              className="w-full py-1.5 bg-green-600/50 hover:bg-green-600 text-white rounded text-[10px] font-medium">
+              Check Price
+            </button>
+            {buyListingPrice && (
+              <div className="p-2 bg-green-500/10 border border-green-500/30 rounded space-y-1">
+                <p className="text-[10px] text-green-300">
+                  Price: <span className="font-medium text-white">{buyListingPrice} ETH</span>
+                </p>
+                {buyListingSeller && (
+                  <p className="text-[9px] text-green-300/70">
+                    Seller: <code className="text-green-400">{buyListingSeller.slice(0, 8)}...{buyListingSeller.slice(-6)}</code>
+                  </p>
+                )}
+              </div>
+            )}
+            <button onClick={handleBuyNft} disabled={txStatus.status === 'pending' || !buyListingPrice}
+              className="w-full py-1.5 bg-green-600 hover:bg-green-500 text-white rounded text-[10px] font-medium disabled:opacity-50">
+              Buy NFT
+            </button>
+          </div>
+
+          {/* Get Listing (Read) */}
+          <div className="p-3 rounded-lg bg-forge-bg/50 border border-forge-border/30 space-y-2">
+            <div className="flex items-center gap-1.5">
+              <DollarSign className="w-3 h-3 text-teal-400" />
+              <span className="text-[10px] font-medium text-teal-400">Check Listing</span>
+            </div>
+            <input type="number" value={getListingTokenId} onChange={(e) => setGetListingTokenId(e.target.value)}
+              placeholder="Token ID"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <button onClick={() => checkListing()}
+              className="w-full py-1.5 bg-teal-600/50 hover:bg-teal-600 text-white rounded text-[10px] font-medium">
+              Check Listing
+            </button>
+            {getListingResult ? (
+              <div className="p-2 bg-teal-500/10 border border-teal-500/30 rounded space-y-1">
+                <p className="text-[10px] text-teal-300">
+                  Price: <span className="font-medium text-white">{getListingResult.price} ETH</span>
+                </p>
+                <p className="text-[9px] text-teal-300/70">
+                  Seller: <code className="text-teal-400 break-all">{getListingResult.seller}</code>
+                </p>
+              </div>
+            ) : getListingTokenId && getListingResult === null && (
+              <div className="p-2 bg-slate-500/10 border border-slate-500/30 rounded">
+                <p className="text-[10px] text-slate-400">Not listed for sale</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Royalties (ERC-2981) ─────────────────────────────── */}
+      {isConnected && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Crown className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-xs font-medium text-white">Royalties (ERC-2981)</span>
+          </div>
+
+          {/* Set Default Royalty (Owner Only) */}
+          {walletConnected && (
+            <div className="p-3 rounded-lg bg-forge-bg/50 border border-forge-border/30 space-y-2">
+              <div className="flex items-center gap-1.5">
+                <Crown className="w-3 h-3 text-amber-400" />
+                <span className="text-[10px] font-medium text-amber-400">Set Default Royalty</span>
+                <span className="text-[8px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded">Owner Only</span>
+              </div>
+              <input type="text" value={royaltyReceiver} onChange={(e) => setRoyaltyReceiver(e.target.value)}
+                placeholder="Receiver Address (0x...)"
+                className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+              <input type="text" value={royaltyFee} onChange={(e) => setRoyaltyFee(e.target.value)}
+                placeholder="Fee % (e.g. 5 for 5%, max 10%)"
+                className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+              <button onClick={handleSetDefaultRoyalty} disabled={txStatus.status === 'pending'}
+                className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-[10px] font-medium disabled:opacity-50">
+                Set Royalty
+              </button>
+            </div>
+          )}
+
+          {/* Check Royalty Info (Read) */}
+          <div className="p-3 rounded-lg bg-forge-bg/50 border border-forge-border/30 space-y-2">
+            <div className="flex items-center gap-1.5">
+              <DollarSign className="w-3 h-3 text-yellow-400" />
+              <span className="text-[10px] font-medium text-yellow-400">Calculate Royalty</span>
+            </div>
+            <input type="number" value={royaltyInfoTokenId} onChange={(e) => setRoyaltyInfoTokenId(e.target.value)}
+              placeholder="Token ID"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <input type="text" value={royaltyInfoSalePrice} onChange={(e) => setRoyaltyInfoSalePrice(e.target.value)}
+              placeholder="Sale Price (ETH)"
+              className="w-full px-2.5 py-1.5 bg-forge-bg border border-forge-border/50 rounded text-xs text-white placeholder-forge-muted focus:outline-none" />
+            <button onClick={checkRoyaltyInfo}
+              className="w-full py-1.5 bg-yellow-600/50 hover:bg-yellow-600 text-white rounded text-[10px] font-medium">
+              Calculate Royalty
+            </button>
+            {royaltyInfoResult && (
+              <div className="p-2 bg-yellow-500/10 border border-yellow-500/30 rounded space-y-1">
+                <p className="text-[10px] text-yellow-300">
+                  Royalty Amount: <span className="font-medium text-white">{royaltyInfoResult.amount} ETH</span>
+                </p>
+                <p className="text-[9px] text-yellow-300/70">
+                  Receiver: <code className="text-yellow-400 break-all">{royaltyInfoResult.receiver}</code>
                 </p>
               </div>
             )}

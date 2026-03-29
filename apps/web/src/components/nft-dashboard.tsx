@@ -20,7 +20,7 @@ import { ERC721InteractionPanel } from '@/lib/erc721-stylus/src/ERC721Interactio
 type SupportedChainId = 421614 | 98985 | 46630;
 type Address = `0x${string}`;
 
-type EventKind = 'Transfer' | 'Approval' | 'ApprovalForAll';
+type EventKind = 'Transfer' | 'Approval' | 'ApprovalForAll' | 'Listed' | 'Sold';
 
 interface GalleryToken {
   tokenId: bigint;
@@ -41,6 +41,27 @@ interface EventRow {
   approved?: Address;
   operator?: Address;
   tokenId?: bigint;
+}
+
+interface ListedLog {
+  transactionHash?: string;
+  blockNumber?: bigint;
+  args: {
+    token_id?: bigint;
+    seller?: string;
+    price?: bigint;
+  };
+}
+
+interface SoldLog {
+  transactionHash?: string;
+  blockNumber?: bigint;
+  args: {
+    token_id?: bigint;
+    seller?: string;
+    buyer?: string;
+    price?: bigint;
+  };
 }
 
 interface TransferLog {
@@ -117,6 +138,27 @@ const APPROVAL_FOR_ALL_EVENT = {
     { indexed: true, name: 'owner', type: 'address' },
     { indexed: true, name: 'operator', type: 'address' },
     { indexed: false, name: 'approved', type: 'bool' },
+  ],
+} as const;
+
+const LISTED_EVENT = {
+  type: 'event',
+  name: 'Listed',
+  inputs: [
+    { indexed: true, name: 'token_id', type: 'uint256' },
+    { indexed: true, name: 'seller', type: 'address' },
+    { indexed: false, name: 'price', type: 'uint256' },
+  ],
+} as const;
+
+const SOLD_EVENT = {
+  type: 'event',
+  name: 'Sold',
+  inputs: [
+    { indexed: true, name: 'token_id', type: 'uint256' },
+    { indexed: true, name: 'seller', type: 'address' },
+    { indexed: true, name: 'buyer', type: 'address' },
+    { indexed: false, name: 'price', type: 'uint256' },
   ],
 } as const;
 
@@ -213,6 +255,8 @@ async function fetchNftMetadata(tokenUri: string): Promise<{
 function eventPillStyles(kind: EventKind): string {
   if (kind === 'Transfer') return 'bg-sky-500/15 text-sky-300 ring-sky-400/30';
   if (kind === 'Approval') return 'bg-amber-500/15 text-amber-300 ring-amber-400/30';
+  if (kind === 'Listed') return 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30';
+  if (kind === 'Sold') return 'bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-400/30';
   return 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30';
 }
 
@@ -260,7 +304,7 @@ export function NftDashboard() {
       const latestBlock = await publicClient.getBlockNumber();
       const fromBlock = latestBlock > LOOKBACK_BLOCKS ? latestBlock - LOOKBACK_BLOCKS : 0n;
 
-      const [name, symbol, supply, transferLogsRaw, approvalLogsRaw, approvalForAllLogsRaw, balance] = await Promise.all([
+      const [name, symbol, supply, transferLogsRaw, approvalLogsRaw, approvalForAllLogsRaw, listedLogsRaw, soldLogsRaw, balance] = await Promise.all([
         safeRead(
           () =>
             publicClient.readContract({
@@ -303,6 +347,18 @@ export function NftDashboard() {
           fromBlock,
           toBlock: latestBlock,
         }),
+        publicClient.getLogs({
+          address: contractAddress,
+          event: LISTED_EVENT as never,
+          fromBlock,
+          toBlock: latestBlock,
+        }),
+        publicClient.getLogs({
+          address: contractAddress,
+          event: SOLD_EVENT as never,
+          fromBlock,
+          toBlock: latestBlock,
+        }),
         address
           ? safeRead(
               () =>
@@ -319,6 +375,8 @@ export function NftDashboard() {
       const transferLogs = transferLogsRaw as TransferLog[];
       const approvalLogs = approvalLogsRaw as ApprovalLog[];
       const approvalForAllLogs = approvalForAllLogsRaw as ApprovalForAllLog[];
+      const listedLogs = listedLogsRaw as ListedLog[];
+      const soldLogs = soldLogsRaw as SoldLog[];
 
       setCollectionName(name ?? 'Stylus NFT Collection');
       setCollectionSymbol(symbol ?? 'NFT');
@@ -428,7 +486,24 @@ export function NftDashboard() {
         operator: log.args.operator as Address | undefined,
       }));
 
-      const allEvents = [...transferRows, ...approvalRows, ...approvalForAllRows]
+      const listedRows: EventRow[] = listedLogs.map((log) => ({
+        kind: 'Listed',
+        txHash: log.transactionHash ?? '0x',
+        blockNumber: log.blockNumber ?? 0n,
+        from: log.args.seller as Address | undefined,
+        tokenId: log.args.token_id,
+      }));
+
+      const soldRows: EventRow[] = soldLogs.map((log) => ({
+        kind: 'Sold',
+        txHash: log.transactionHash ?? '0x',
+        blockNumber: log.blockNumber ?? 0n,
+        from: log.args.seller as Address | undefined,
+        to: log.args.buyer as Address | undefined,
+        tokenId: log.args.token_id,
+      }));
+
+      const allEvents = [...transferRows, ...approvalRows, ...approvalForAllRows, ...listedRows, ...soldRows]
         .sort((a, b) => Number(b.blockNumber - a.blockNumber))
         .slice(0, MAX_EVENT_ITEMS);
 
@@ -688,6 +763,20 @@ export function NftDashboard() {
                       Owner {shortAddress(event.owner)} set operator {shortAddress(event.operator)}
                     </p>
                   )}
+
+                  {event.kind === 'Listed' && (
+                    <p className="text-xs text-slate-300">
+                      {shortAddress(event.from)} listed
+                      {event.tokenId !== undefined ? ` Token #${event.tokenId.toString()}` : ''}
+                    </p>
+                  )}
+
+                  {event.kind === 'Sold' && (
+                    <p className="text-xs text-slate-300">
+                      {shortAddress(event.from)} sold to {shortAddress(event.to)}
+                      {event.tokenId !== undefined ? ` • Token #${event.tokenId.toString()}` : ''}
+                    </p>
+                  )}
                 </article>
               ))}
             </div>
@@ -723,6 +812,12 @@ export function NftDashboard() {
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-500/20 px-3 py-1 text-xs font-medium text-orange-300 ring-1 ring-orange-500/30">
                 <Blocks className="h-3 w-3" /> Burn
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/30">
+                <Blocks className="h-3 w-3" /> Marketplace
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-300 ring-1 ring-amber-500/30">
+                <Blocks className="h-3 w-3" /> Royalties
               </span>
             </div>
           </div>

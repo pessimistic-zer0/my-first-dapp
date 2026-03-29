@@ -414,10 +414,11 @@ impl<T: Erc721Params> Erc721<T> {
         const IERC165: u32 = 0x01ffc9a7;
         const IERC721: u32 = 0x80ac58cd;
         const IERC721_METADATA: u32 = 0x5b5e139f;
+        const IERC2981: u32 = 0x2a55205a;
 
         Ok(matches!(
             u32::from_be_bytes(interface_slice_array),
-            IERC165 | IERC721 | IERC721_METADATA
+            IERC165 | IERC721 | IERC721_METADATA | IERC2981
         ))
     }
 }

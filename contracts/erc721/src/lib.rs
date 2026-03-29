@@ -44,6 +44,8 @@ sol_storage! {
         bool initialized;
         /// Whether the contract is paused (emergency stop)
         bool paused;
+        /// Maximum number of NFTs that can be minted (0 = unlimited)
+        uint256 max_supply;
         /// Address of companion art contract
         address art_contract_address;
 
@@ -64,6 +66,8 @@ sol! {
     error ZeroAddressOwner();
     /// Contract is paused
     error ContractPaused();
+    /// Max supply has been reached, no more NFTs can be minted
+    error MaxSupplyReached(uint256 max_supply);
 
     /// Emitted when ownership is transferred
     event OwnershipTransferred(address indexed previous_owner, address indexed new_owner);
@@ -81,6 +85,7 @@ pub enum RobinhoodNFTError {
     NotOwner(NotOwner),
     ZeroAddressOwner(ZeroAddressOwner),
     ContractPaused(ContractPaused),
+    MaxSupplyReached(MaxSupplyReached),
 }
 
 // Internal helper methods (not exposed to other contracts)
@@ -104,19 +109,33 @@ impl RobinhoodNFT {
         }
         Ok(())
     }
+
+    /// Checks that minting won't exceed the max supply cap.
+    /// If max_supply is 0, minting is unlimited.
+    fn check_supply(&self) -> Result<(), Vec<u8>> {
+        let max = self.max_supply.get();
+        if max > U256::ZERO && self.erc721.total_supply.get() >= max {
+            return Err(RobinhoodNFTError::MaxSupplyReached(MaxSupplyReached {
+                max_supply: max,
+            }).into());
+        }
+        Ok(())
+    }
 }
 
 #[public]
 #[inherit(Erc721<RobinhoodNFTParams>)]
 impl RobinhoodNFT {
     /// Initializes the contract, setting the caller as the owner.
+    /// `max_supply`: maximum NFTs that can ever be minted (0 = unlimited).
     /// Can only be called once.
-    pub fn initialize(&mut self) -> Result<(), Vec<u8>> {
+    pub fn initialize(&mut self, max_supply: U256) -> Result<(), Vec<u8>> {
         if self.initialized.get() {
             return Err(RobinhoodNFTError::AlreadyInitialized(AlreadyInitialized {}).into());
         }
         self.initialized.set(true);
         self.owner.set(msg::sender());
+        self.max_supply.set(max_supply);
 
         evm::log(OwnershipTransferred {
             previous_owner: Address::default(),
@@ -131,27 +150,35 @@ impl RobinhoodNFT {
         Ok(self.owner.get())
     }
 
-    /// Mints an NFT to the caller. Only the owner can call this. Reverts if paused.
+    /// Returns the maximum number of NFTs that can be minted (0 = unlimited)
+    pub fn get_max_supply(&self) -> Result<U256, Vec<u8>> {
+        Ok(self.max_supply.get())
+    }
+
+    /// Mints an NFT to the caller. Only the owner can call this. Reverts if paused or max supply reached.
     pub fn mint(&mut self) -> Result<(), Vec<u8>> {
         self.when_not_paused()?;
         self.only_owner()?;
+        self.check_supply()?;
         let minter = msg::sender();
         self.erc721.mint(minter)?;
         Ok(())
     }
 
-    /// Mints an NFT to the specified address. Only the owner can call this. Reverts if paused.
+    /// Mints an NFT to the specified address. Only the owner can call this. Reverts if paused or max supply reached.
     pub fn mint_to(&mut self, to: Address) -> Result<(), Vec<u8>> {
         self.when_not_paused()?;
         self.only_owner()?;
+        self.check_supply()?;
         self.erc721.mint(to)?;
         Ok(())
     }
 
-    /// Mints an NFT safely (calls onERC721Received). Only the owner can call this. Reverts if paused.
+    /// Mints an NFT safely (calls onERC721Received). Only the owner can call this. Reverts if paused or max supply reached.
     pub fn safe_mint(&mut self, to: Address) -> Result<(), Vec<u8>> {
         self.when_not_paused()?;
         self.only_owner()?;
+        self.check_supply()?;
         Erc721::safe_mint(self, to, Vec::new())?;
         Ok(())
     }

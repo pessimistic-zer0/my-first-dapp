@@ -2,34 +2,143 @@
 @tailwind components;
 @tailwind utilities;
 
-    :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 255, 255, 255;
-  --background-end-rgb: 245, 245, 245;
+:root {
+  --foreground-rgb: 18, 24, 38;
+  --background-start-rgb: 246, 249, 255;
+  --background-end-rgb: 233, 242, 255;
+  --surface-rgb: 255, 255, 255;
+  --surface-border-rgb: 122, 152, 190;
+  --glow-a: 56, 189, 248;
+  --glow-b: 251, 146, 60;
 }
 
-    
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --foreground-rgb: 255, 255, 255;
-        --background-start-rgb: 0, 0, 0;
-        --background-end-rgb: 0, 0, 0;
-      }
-    }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 231, 238, 247;
+    --background-start-rgb: 8, 13, 23;
+    --background-end-rgb: 18, 24, 40;
+    --surface-rgb: 14, 20, 33;
+    --surface-border-rgb: 72, 93, 124;
+    --glow-a: 34, 211, 238;
+    --glow-b: 168, 85, 247;
+  }
+}
 
-    .dark {
-      --foreground-rgb: 255, 255, 255;
-      --background-start-rgb: 0, 0, 0;
-      --background-end-rgb: 0, 0, 0;
-    }
-    
+.dark {
+  --foreground-rgb: 231, 238, 247;
+  --background-start-rgb: 8, 13, 23;
+  --background-end-rgb: 18, 24, 40;
+  --surface-rgb: 14, 20, 33;
+  --surface-border-rgb: 72, 93, 124;
+  --glow-a: 34, 211, 238;
+  --glow-b: 168, 85, 247;
+}
 
-    body {
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
   color: rgb(var(--foreground-rgb));
+  font-family: var(--font-body), sans-serif;
   background: linear-gradient(
-    to bottom,
-    transparent,
-    rgb(var(--background-end-rgb))
-        )
-  rgb(var(--background-start-rgb));
+      135deg,
+      rgba(var(--background-start-rgb), 0.98) 0%,
+      rgba(var(--background-end-rgb), 1) 58%,
+      rgba(var(--background-start-rgb), 0.96) 100%
+    )
+    rgb(var(--background-start-rgb));
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display), sans-serif;
+}
+
+.page-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 16% 14%, rgba(var(--glow-a), 0.18) 0%, transparent 36%),
+    radial-gradient(circle at 82% 22%, rgba(var(--glow-b), 0.2) 0%, transparent 34%),
+    radial-gradient(circle at 56% 88%, rgba(var(--glow-a), 0.1) 0%, transparent 30%);
+  animation: drift 18s ease-in-out infinite alternate;
+}
+
+.glass-panel {
+  border: 1px solid rgba(var(--surface-border-rgb), 0.26);
+  background: linear-gradient(
+    155deg,
+    rgba(var(--surface-rgb), 0.88) 0%,
+    rgba(var(--surface-rgb), 0.65) 100%
+  );
+  backdrop-filter: blur(12px);
+  box-shadow:
+    0 12px 30px rgba(2, 8, 24, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.glass-stat {
+  border: 1px solid rgba(var(--surface-border-rgb), 0.2);
+  background: rgba(var(--surface-rgb), 0.44);
+}
+
+.gallery-card {
+  border: 1px solid rgba(var(--surface-border-rgb), 0.25);
+  background: rgba(var(--surface-rgb), 0.4);
+  transition: transform 220ms ease, border-color 220ms ease, background-color 220ms ease;
+}
+
+.gallery-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(var(--glow-a), 0.42);
+  background: rgba(var(--surface-rgb), 0.52);
+}
+
+.token-fallback {
+  background:
+    linear-gradient(145deg, rgba(var(--glow-a), 0.22), rgba(var(--glow-b), 0.16)),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.04) 0px,
+      rgba(255, 255, 255, 0.04) 10px,
+      rgba(0, 0, 0, 0.1) 10px,
+      rgba(0, 0, 0, 0.1) 20px
+    );
+}
+
+.reveal-up {
+  opacity: 0;
+  transform: translateY(16px);
+  animation: revealUp 560ms ease forwards;
+}
+
+@keyframes revealUp {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes drift {
+  0% {
+    transform: scale(1) translateY(0);
+    filter: saturate(1);
+  }
+  100% {
+    transform: scale(1.06) translateY(-14px);
+    filter: saturate(1.15);
+  }
 }

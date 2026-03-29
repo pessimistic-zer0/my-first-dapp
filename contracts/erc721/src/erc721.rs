@@ -8,7 +8,7 @@
 //!
 //! Note that this code is unaudited and not fit for production use.
 
-use alloc::vec;
+use alloc::{string::ToString, vec};
 use core::{borrow::BorrowMut, marker::PhantomData};
 use stylus_sdk::{
     abi::Bytes,
@@ -40,6 +40,8 @@ sol_storage! {
         mapping(address => mapping(address => bool)) operator_approvals;
         /// Total supply
         uint256 total_supply;
+        /// Base URI for token metadata (e.g. "https://api.example.com/metadata/")
+        string base_uri;
         /// Used to allow [`Erc721Params`]
         PhantomData<T> phantom;
     }
@@ -237,6 +239,8 @@ impl<T: Erc721Params> Erc721<T> {
 }
 
 // these methods are public to other contracts
+// Note: set_base_uri is intentionally not #[public] here — it's exposed
+// via the parent contract (lib.rs) with owner-only access control.
 #[public]
 impl<T: Erc721Params> Erc721<T> {
     /// Immutable NFT name.
@@ -247,6 +251,31 @@ impl<T: Erc721Params> Erc721<T> {
     /// Immutable NFT symbol.
     pub fn symbol() -> Result<String, Erc721Error> {
         Ok(T::SYMBOL.into())
+    }
+
+    /// Returns the metadata URI for a given token.
+    /// Marketplaces like OpenSea call this to fetch images and descriptions.
+    pub fn token_uri(&self, token_id: U256) -> Result<String, Erc721Error> {
+        // Verify the token exists first
+        self.owner_of(token_id)?;
+
+        let base = self.base_uri.get_string();
+        if base.is_empty() {
+            return Ok(String::new());
+        }
+
+        // Concatenate base_uri + token_id (e.g. "https://api.example.com/metadata/" + "42")
+        Ok(base + &token_id.to_string())
+    }
+
+    /// Returns the base URI. Used internally by the parent contract.
+    pub fn base_uri(&self) -> Result<String, Erc721Error> {
+        Ok(self.base_uri.get_string())
+    }
+
+    /// Sets the base URI. Called by the parent contract (not directly public).
+    pub fn set_base_uri_internal(&mut self, uri: String) {
+        self.base_uri.set_str(&uri);
     }
 
     /// Gets the number of NFTs owned by an account.

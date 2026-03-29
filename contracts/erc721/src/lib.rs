@@ -161,4 +161,18 @@ impl RobinhoodNFT {
 
         Ok(())
     }
+
+    /// Sets the base URI for token metadata. Only the owner can call this.
+    /// Example: set_base_uri("https://api.example.com/metadata/")
+    /// Then tokenURI(42) will return "https://api.example.com/metadata/42"
+    pub fn set_base_uri(&mut self, base_uri: String) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.erc721.set_base_uri_internal(base_uri);
+        Ok(())
+    }
+
+    /// Returns the current base URI for token metadata.
+    pub fn get_base_uri(&self) -> Result<String, Vec<u8>> {
+        Ok(self.erc721.base_uri().map_err(|e| -> Vec<u8> { e.into() })?)
+    }
 }

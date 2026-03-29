@@ -1,4 +1,5 @@
 import { WalletButton } from '@/components/wallet-button';
+import { ERC721InteractionPanel } from '@/lib/erc721-stylus/src/ERC721InteractionPanel';
 
 export default function Home() {
   return (
@@ -10,9 +11,12 @@ export default function Home() {
         <p className="text-lg text-gray-600 dark:text-gray-400 mb-12">
           A Web3 application built with Cradle
         </p>
-        
-        <div className="flex justify-center">
+
+        <div className="flex flex-col items-center gap-8">
           <WalletButton />
+          <div className="w-full max-w-lg">
+            <ERC721InteractionPanel />
+          </div>
         </div>
       </div>
     </main>

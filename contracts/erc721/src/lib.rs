@@ -46,6 +46,14 @@ sol_storage! {
         bool paused;
         /// Maximum number of NFTs that can be minted (0 = unlimited)
         uint256 max_supply;
+        /// Whether whitelist minting is enabled
+        bool whitelist_enabled;
+        /// Maximum NFTs a whitelisted address can mint (0 = unlimited)
+        uint256 whitelist_mint_limit;
+        /// Approved addresses for whitelist minting
+        mapping(address => bool) whitelist;
+        /// Number of NFTs minted by each whitelisted address
+        mapping(address => uint256) whitelist_mints;
         /// Address of companion art contract
         address art_contract_address;
 
@@ -68,6 +76,10 @@ sol! {
     error ContractPaused();
     /// Max supply has been reached, no more NFTs can be minted
     error MaxSupplyReached(uint256 max_supply);
+    /// Caller is not authorized to mint (not owner and not whitelisted)
+    error NotAuthorizedToMint(address caller);
+    /// Whitelisted address has exceeded their mint limit
+    error MintLimitExceeded(address caller, uint256 limit);
 
     /// Emitted when ownership is transferred
     event OwnershipTransferred(address indexed previous_owner, address indexed new_owner);
@@ -75,6 +87,8 @@ sol! {
     event Paused(address account);
     /// Emitted when the contract is unpaused
     event Unpaused(address account);
+    /// Emitted when an address is added to or removed from the whitelist
+    event WhitelistUpdated(address indexed account, bool status);
 }
 
 /// Represents the ways methods may fail.
@@ -86,6 +100,8 @@ pub enum RobinhoodNFTError {
     ZeroAddressOwner(ZeroAddressOwner),
     ContractPaused(ContractPaused),
     MaxSupplyReached(MaxSupplyReached),
+    NotAuthorizedToMint(NotAuthorizedToMint),
+    MintLimitExceeded(MintLimitExceeded),
 }
 
 // Internal helper methods (not exposed to other contracts)
@@ -180,6 +196,37 @@ impl RobinhoodNFT {
         self.only_owner()?;
         self.check_supply()?;
         Erc721::safe_mint(self, to, Vec::new())?;
+        Ok(())
+    }
+
+    /// Mints an NFT to the caller. Only whitelisted addresses can call this when whitelist is enabled.
+    /// Respects pause, max supply, and per-wallet mint limits.
+    pub fn whitelist_mint(&mut self) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+        self.check_supply()?;
+
+        let caller = msg::sender();
+
+        // Must be whitelisted and whitelist must be enabled
+        if !self.whitelist_enabled.get() || !self.whitelist.getter(caller).get() {
+            return Err(RobinhoodNFTError::NotAuthorizedToMint(NotAuthorizedToMint {
+                caller,
+            }).into());
+        }
+
+        // Check per-wallet mint limit (0 = unlimited)
+        let limit = self.whitelist_mint_limit.get();
+        let minted = self.whitelist_mints.getter(caller).get();
+        if limit > U256::ZERO && minted >= limit {
+            return Err(RobinhoodNFTError::MintLimitExceeded(MintLimitExceeded {
+                caller,
+                limit,
+            }).into());
+        }
+
+        // Track how many this address has minted
+        self.whitelist_mints.setter(caller).set(minted + U256::from(1));
+        self.erc721.mint(caller)?;
         Ok(())
     }
 
@@ -280,5 +327,64 @@ impl RobinhoodNFT {
     /// Returns the current base URI for token metadata.
     pub fn get_base_uri(&self) -> Result<String, Vec<u8>> {
         Ok(self.erc721.base_uri().map_err(|e| -> Vec<u8> { e.into() })?)
+    }
+
+    // ─── Whitelist Management (Owner Only) ───────────────────────────
+
+    /// Enables or disables whitelist minting mode. Only the owner can call this.
+    pub fn set_whitelist_enabled(&mut self, enabled: bool) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.whitelist_enabled.set(enabled);
+        Ok(())
+    }
+
+    /// Returns whether whitelist minting is currently enabled.
+    pub fn is_whitelist_enabled(&self) -> Result<bool, Vec<u8>> {
+        Ok(self.whitelist_enabled.get())
+    }
+
+    /// Sets the per-wallet mint limit for whitelisted addresses (0 = unlimited).
+    /// Only the owner can call this.
+    pub fn set_whitelist_mint_limit(&mut self, limit: U256) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.whitelist_mint_limit.set(limit);
+        Ok(())
+    }
+
+    /// Returns the per-wallet mint limit for whitelisted addresses.
+    pub fn get_whitelist_mint_limit(&self) -> Result<U256, Vec<u8>> {
+        Ok(self.whitelist_mint_limit.get())
+    }
+
+    /// Adds an address to the whitelist. Only the owner can call this.
+    pub fn add_to_whitelist(&mut self, account: Address) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.whitelist.setter(account).set(true);
+        evm::log(WhitelistUpdated {
+            account,
+            status: true,
+        });
+        Ok(())
+    }
+
+    /// Removes an address from the whitelist. Only the owner can call this.
+    pub fn remove_from_whitelist(&mut self, account: Address) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.whitelist.setter(account).set(false);
+        evm::log(WhitelistUpdated {
+            account,
+            status: false,
+        });
+        Ok(())
+    }
+
+    /// Returns whether an address is on the whitelist.
+    pub fn is_whitelisted(&self, account: Address) -> Result<bool, Vec<u8>> {
+        Ok(self.whitelist.getter(account).get())
+    }
+
+    /// Returns how many NFTs a whitelisted address has minted.
+    pub fn whitelist_mints_of(&self, account: Address) -> Result<U256, Vec<u8>> {
+        Ok(self.whitelist_mints.getter(account).get())
     }
 }

@@ -42,6 +42,8 @@ sol_storage! {
         address owner;
         /// Whether the contract has been initialized
         bool initialized;
+        /// Whether the contract is paused (emergency stop)
+        bool paused;
         /// Address of companion art contract
         address art_contract_address;
 
@@ -60,9 +62,15 @@ sol! {
     error NotOwner(address caller, address owner);
     /// New owner cannot be the zero address
     error ZeroAddressOwner();
+    /// Contract is paused
+    error ContractPaused();
 
     /// Emitted when ownership is transferred
     event OwnershipTransferred(address indexed previous_owner, address indexed new_owner);
+    /// Emitted when the contract is paused
+    event Paused(address account);
+    /// Emitted when the contract is unpaused
+    event Unpaused(address account);
 }
 
 /// Represents the ways methods may fail.
@@ -72,6 +80,7 @@ pub enum RobinhoodNFTError {
     ExternalCallFailed(ExternalCallFailed),
     NotOwner(NotOwner),
     ZeroAddressOwner(ZeroAddressOwner),
+    ContractPaused(ContractPaused),
 }
 
 // Internal helper methods (not exposed to other contracts)
@@ -84,6 +93,14 @@ impl RobinhoodNFT {
                 caller: msg::sender(),
                 owner,
             }).into());
+        }
+        Ok(())
+    }
+
+    /// Checks that the contract is not paused. Returns an error if it is.
+    fn when_not_paused(&self) -> Result<(), Vec<u8>> {
+        if self.paused.get() {
+            return Err(RobinhoodNFTError::ContractPaused(ContractPaused {}).into());
         }
         Ok(())
     }
@@ -114,32 +131,94 @@ impl RobinhoodNFT {
         Ok(self.owner.get())
     }
 
-    /// Mints an NFT to the caller. Only the owner can call this.
+    /// Mints an NFT to the caller. Only the owner can call this. Reverts if paused.
     pub fn mint(&mut self) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
         self.only_owner()?;
         let minter = msg::sender();
         self.erc721.mint(minter)?;
         Ok(())
     }
 
-    /// Mints an NFT to the specified address. Only the owner can call this.
+    /// Mints an NFT to the specified address. Only the owner can call this. Reverts if paused.
     pub fn mint_to(&mut self, to: Address) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
         self.only_owner()?;
         self.erc721.mint(to)?;
         Ok(())
     }
 
-    /// Mints an NFT safely (calls onERC721Received). Only the owner can call this.
+    /// Mints an NFT safely (calls onERC721Received). Only the owner can call this. Reverts if paused.
     pub fn safe_mint(&mut self, to: Address) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
         self.only_owner()?;
         Erc721::safe_mint(self, to, Vec::new())?;
         Ok(())
     }
 
-    /// Burns an NFT. Any holder can burn their own NFTs.
+    /// Burns an NFT. Any holder can burn their own NFTs. Reverts if paused.
     pub fn burn(&mut self, token_id: U256) -> Result<(), Vec<u8>> {
-        // This function checks that msg::sender() owns the specified token_id
+        self.when_not_paused()?;
         self.erc721.burn(msg::sender(), token_id)?;
+        Ok(())
+    }
+
+    /// Transfers an NFT. Reverts if paused.
+    /// Overrides the inherited transferFrom to add pause guard.
+    pub fn transfer_from(
+        &mut self,
+        from: Address,
+        to: Address,
+        token_id: U256,
+    ) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+        self.erc721.transfer_from(from, to, token_id)?;
+        Ok(())
+    }
+
+    /// Approves an address to manage a specific NFT. Reverts if paused.
+    /// Overrides the inherited approve to add pause guard.
+    pub fn approve(&mut self, approved: Address, token_id: U256) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+        self.erc721.approve(approved, token_id)?;
+        Ok(())
+    }
+
+    /// Sets or revokes operator approval. Reverts if paused.
+    /// Overrides the inherited setApprovalForAll to add pause guard.
+    pub fn set_approval_for_all(
+        &mut self,
+        operator: Address,
+        approved: bool,
+    ) -> Result<(), Vec<u8>> {
+        self.when_not_paused()?;
+        self.erc721.set_approval_for_all(operator, approved)?;
+        Ok(())
+    }
+
+    /// Returns whether the contract is currently paused.
+    pub fn paused(&self) -> Result<bool, Vec<u8>> {
+        Ok(self.paused.get())
+    }
+
+    /// Pauses the contract. Only the owner can call this.
+    /// When paused, all transfers, mints, burns, and approvals are blocked.
+    pub fn pause(&mut self) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.paused.set(true);
+        evm::log(Paused {
+            account: msg::sender(),
+        });
+        Ok(())
+    }
+
+    /// Unpauses the contract. Only the owner can call this.
+    pub fn unpause(&mut self) -> Result<(), Vec<u8>> {
+        self.only_owner()?;
+        self.paused.set(false);
+        evm::log(Unpaused {
+            account: msg::sender(),
+        });
         Ok(())
     }
 
